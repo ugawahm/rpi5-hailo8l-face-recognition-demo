@@ -14,17 +14,17 @@ from quality_assessment import QualityAssessor
 from utils import bbox_iou, get_quality_indicator_color, draw_help_text
 
 class FaceRecognitionSystem:
-    def __init__(self, faces_dir="./faces", models_dir="./models", detect_every_n_frames=5, 
-                 cache_size=10, input_source="rpi", confidence_threshold=0.55, 
+    def __init__(self, faces_dir="faces", models_dir="./models", detect_every_n_frames=3, 
+                 cache_size=10, input_source="rpi", confidence_threshold=0.6, 
                  adaptive_threshold=True):
-        """初始化程序
+        """初始化人脸识别系统
         
         Args:
             input_source: 输入源 ('rpi', 'usb', 或文件路径)
             confidence_threshold: 人脸识别置信度阈值
             adaptive_threshold: 是否启用自适应阈值
         """
-        print("🚀 初始化...")
+        print("🚀 初始化人脸识别系统...")
         
         # 初始化 DeGirum 本地模型Zoo
         print(f"📦 连接本地模型Zoo: {models_dir}")
@@ -311,6 +311,10 @@ class FaceRecognitionSystem:
         
         frame_id = 0
         
+        # 检查是否为静态图片源
+        is_static_image = self.input_handler.is_static_image_source()
+        processed_static_image = False # 标记静态图片是否已处理并显示过一次
+        
         try:
             while True:
                 loop_start = time.time()
@@ -324,7 +328,9 @@ class FaceRecognitionSystem:
                 frame_id += 1
                 
                 # 定期向检测队列发送帧
-                if self.frame_counter % self.detect_every_n_frames == 0:
+                # 对于静态图片，只在第一次循环时发送一次
+                if (self.frame_counter % self.detect_every_n_frames == 0 and not is_static_image) or \
+                   (is_static_image and not processed_static_image):
                     if not self.detection_queue.full():
                         self.detection_queue.put((frame.copy(), frame_id))
                 
@@ -332,7 +338,35 @@ class FaceRecognitionSystem:
                 current_detections = []
                 captured_faces_for_save = []
                 
-                if not self.result_queue.empty():
+                # 尝试从队列获取最新结果，如果队列为空则使用上次的结果
+                # 对于静态图片，需要等待识别线程完成
+                if is_static_image and not processed_static_image:
+                    # 对于静态图片，等待识别结果，直到队列中有数据
+                    # 或者设置一个超时，防止无限等待
+                    try:
+                        results, result_frame_id = self.result_queue.get(timeout=5) # 增加超时
+                        # print(f"Static image: Got results for frame_id {result_frame_id}")
+                        for result in results:
+                            bbox = result['bbox']
+                            name = result['name']
+                            confidence = result['confidence']
+                            quality = result['quality']
+                            
+                            current_detections.append((bbox, name, confidence, quality))
+                            
+                            captured_faces_for_save.append({
+                                'bbox': bbox,
+                                'crop': result['crop'],
+                                'features': result['features']
+                            })
+                        
+                        self.last_detections = current_detections
+                        self.last_captured_faces = captured_faces_for_save
+                        processed_static_image = True # 标记已处理
+                    except Exception as e:
+                        print(f"⚠️ 静态图片识别超时或错误: {e}. 显示原始图片。")
+                        current_detections = [] # 如果超时，不显示任何检测框
+                elif not self.result_queue.empty():
                     try:
                         results, result_frame_id = self.result_queue.get_nowait()
                         
@@ -407,9 +441,36 @@ class FaceRecognitionSystem:
                 cv2.imshow("Face Recognition System - Multi-threaded", frame_bgr)
 
                 # 动态调整延迟
-                elapsed = time.time() - loop_start
-                target_fps = 24
-                delay = max(1, int((1.0 / target_fps - elapsed) * 1000))
+                if is_static_image and processed_static_image:
+                    # 静态图片处理完成后，等待用户按键退出或进行其他操作
+                    key = cv2.waitKey(0) & 0xFF 
+                    if key == ord('q'):
+                        break
+                    elif key == ord('s') and not self.input_mode:
+                        captured_faces_snapshot = self.last_captured_faces.copy()
+                        if not captured_faces_snapshot:
+                            print("❌ 未检测到人脸，请对准摄像头")
+                            continue
+
+                        self.input_mode = True
+                        thread = threading.Thread(
+                            target=self.handle_face_capture_async,
+                            args=(captured_faces_snapshot,)
+                        )
+                        thread.daemon = True
+                        thread.start()
+                    # 如果是静态图片且已处理，且用户未按q，则继续循环，但不再重新处理
+                    # 这样可以保持窗口显示，直到用户操作
+                    continue # 跳过后续的延迟计算，直接进入下一次循环等待按键
+                elif is_static_image and not processed_static_image:
+                    # 静态图片首次处理中，不等待按键，快速循环以获取结果
+                    delay = 1 # 快速刷新
+                else:
+                    # 视频流模式下的正常延迟
+                    elapsed = time.time() - loop_start
+                    target_fps = 24
+                    delay = max(1, int((1.0 / target_fps - elapsed) * 1000))
+                
                 key = cv2.waitKey(delay) & 0xFF
 
                 if key == ord('q'):
@@ -427,12 +488,6 @@ class FaceRecognitionSystem:
                     )
                     thread.daemon = True
                     thread.start()
-
-                # 静态图片模式
-                if self.input_handler.is_static_image_source():
-                    key = cv2.waitKey(0) & 0xFF
-                    if key == ord('q'):
-                        break
 
         except KeyboardInterrupt:
             print("\n⏹️  用户中断")
