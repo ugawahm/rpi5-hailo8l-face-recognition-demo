@@ -8,7 +8,8 @@ hailort版本：4.20 \
 
 # 使用方法
 1.项目根目录下创建/faces和/models目录 \
-2.下载degirum hub（https://hub.degirum.com/public-models/degirum/hailo）提供的hef文件或将自己训练的hef文件导入models目录 \
+2.下载degirum hub提供的hef文件或将自己训练的hef文件导入models目录 \
+  degirum hub网址：https://hub.degirum.com/public-models/degirum/hailo \
 3.激活degirum虚拟环境 \
 4.运行main.py \
 运行示例： \
