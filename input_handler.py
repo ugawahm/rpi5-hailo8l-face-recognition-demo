@@ -17,12 +17,12 @@ class InputHandler:
             print("📷 初始化 Picamera2 (CSI)...")
             self.camera = Picamera2()
             config = self.camera.create_preview_configuration(
-                main={"size": (640, 480), "format": "BGR888"},
+                main={"size": (640, 480), "format": "RGB888"},
                 controls={"FrameRate": 24}
             )
             self.camera.configure(config)
             self.camera.start()
-            time.sleep(2)
+            time.sleep(1)
             print("✅ CSI 摄像头启动成功")
             
         elif input_source == "usb":
