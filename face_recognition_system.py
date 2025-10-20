@@ -24,33 +24,44 @@ class FaceRecognitionSystem:
             confidence_threshold: 人脸识别置信度阈值
             adaptive_threshold: 是否启用自适应阈值
         """
+        init_start_time = time.time()
         print("🚀 初始化人脸识别系统...")
         
         # 初始化 DeGirum 本地模型Zoo
         print(f"📦 连接本地模型Zoo: {models_dir}")
+        zoo_connect_start = time.time()
         zoo = dg.connect(dg.LOCAL, models_dir)
+        print(f"✅ 连接本地模型Zoo成功，耗时: {time.time() - zoo_connect_start:.2f}s")
         
         # 加载人脸检测模型
         print("🔍 加载人脸检测模型...")
+        detector_load_start = time.time()
         self.face_detector = zoo.load_model("scrfd_10g--640x640_quant_hailort_hailo8l_1")
         self.face_detector.input_letterbox_fill_color = (114, 114, 114)
-        print("✅ 人脸检测模型加载成功")
+        print(f"✅ 人脸检测模型加载成功，耗时: {time.time() - detector_load_start:.2f}s")
         
         # 加载人脸特征提取模型
         print("🧬 加载人脸特征提取模型...")
+        encoder_load_start = time.time()
         self.face_encoder = zoo.load_model("arcface_r50")
-        print("✅ 人脸特征提取模型加载成功")
+        print(f"✅ 人脸特征提取模型加载成功，耗时: {time.time() - encoder_load_start:.2f}s")
         
         # 初始化输入源
+        print("🎥 初始化输入源...")
+        input_handler_init_start = time.time()
         self.input_handler = InputHandler(input_source)
         self.input_source_type = input_source
+        print(f"✅ 输入源初始化成功，耗时: {time.time() - input_handler_init_start:.2f}s")
         
         # 人脸库管理
+        print("📚 初始化人脸数据库管理器...")
+        db_manager_init_start = time.time()
         self.face_database_manager = FaceDatabase(faces_dir, self.face_detector, self.face_encoder)
-        self.face_database_manager.load_face_database()
+        self.face_database_manager.load_face_database() # 计时已在FaceDatabase内部
+        print(f"✅ 人脸数据库管理器初始化成功，耗时: {time.time() - db_manager_init_start:.2f}s")
         
         # 性能优化参数
-        self.detect_every_n_frames = detect_every_n_frames
+        self.detect_every_n_frames = detect_every_n_frames 
         self.frame_counter = 0
         self.last_detections = []
         self.last_captured_faces = []
@@ -81,9 +92,77 @@ class FaceRecognitionSystem:
         
         # 输入模式控制
         self.input_mode = False
+
+        # 首次调用模型标记
+        # 在热身后，将这些设置为 False，这样主循环中的第一次真实检测就不会再打印“首帧耗时”
+        self.first_detection_run = False 
+        self.first_recognition_run = False 
         
         # 启动后台线程
         self._start_threads()
+
+        # --- 新增：模型热身 (Model Warm-up) ---
+        print("🔥 对Hailo-8L模型进行热身...")
+        warmup_start = time.time()
+        
+        # 获取摄像头的默认分辨率，用于创建假的空白帧
+        # 假设InputHandler已经初始化并可以获取分辨率
+        # 你可能需要根据你的InputHandler实现来获取正确的尺寸
+        # 如果是视频文件，可以尝试从视频读取第一帧来获取尺寸
+        dummy_width = 640  # 默认值，请根据你的实际情况调整
+        dummy_height = 480 # 默认值，请根据你的实际情况调整
+        
+        try:
+            if self.input_source_type == "rpi":
+                # Picamera2 启动后分辨率会稳定
+                # 可以在 InputHandler 中添加方法来获取当前分辨率
+                # 或者直接使用一个已知的分辨率，比如 640x480
+                pass # 保持默认 dummy_width/height 或从 input_handler 获取
+            elif self.input_source_type == "usb":
+                 # USB摄像头可能默认分辨率
+                 pass # 保持默认 dummy_width/height 或从 input_handler 获取
+            else: # 视频文件
+                temp_cap = cv2.VideoCapture(self.input_source_type)
+                if temp_cap.isOpened():
+                    dummy_width = int(temp_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    dummy_height = int(temp_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    temp_cap.release()
+                else:
+                    print(f"   ⚠️ 无法打开视频文件 {self.input_source_type} 获取分辨率，使用默认 {dummy_width}x{dummy_height}")
+        except Exception as e:
+            print(f"   ⚠️ 获取输入源分辨率失败: {e}，使用默认 {dummy_width}x{dummy_height}")
+
+        dummy_frame = np.zeros((dummy_height, dummy_width, 3), dtype=np.uint8) 
+        
+        # 1. 热身人脸检测模型
+        try:
+            print("   -> 热身人脸检测模型...")
+            _ = self.face_detector(dummy_frame)
+            print("   ✅ 人脸检测模型热身完成。")
+        except Exception as e:
+            print(f"   ❌ 人脸检测模型热身失败: {e}")
+            
+        # 2. 热身人脸特征提取模型 (需要裁剪出“假”的人脸区域)
+        # 确保裁剪区域不为空，且足够大供模型处理
+        dummy_face_crop_h = min(100, dummy_height)
+        dummy_face_crop_w = min(100, dummy_width)
+        dummy_face_crop = dummy_frame[0:dummy_face_crop_h, 0:dummy_face_crop_w] 
+
+        if dummy_face_crop.size > 0 and dummy_face_crop_h > 0 and dummy_face_crop_w > 0:
+            try:
+                print("   -> 热身人脸特征提取模型...")
+                _ = self.face_encoder(dummy_face_crop)
+                print("   ✅ 人脸特征提取模型热身完成。")
+            except Exception as e:
+                print(f"   ❌ 人脸特征提取模型热身失败: {e}")
+        else:
+            print("   ⚠️ 无法创建有效假人脸区域，跳过特征提取模型热身。")
+
+        print(f"🔥 模型热身总耗时: {time.time() - warmup_start:.2f}s")
+        # --- 热身结束 ---
+
+        print(f"🚀 人脸识别系统初始化总耗时: {time.time() - init_start_time:.2f}s")
+
 
     def _start_threads(self):
         """启动后台处理线程"""
@@ -115,7 +194,13 @@ class FaceRecognitionSystem:
                 frame, frame_id = frame_data
                 
                 # 执行人脸检测
+                detection_start = time.time()
                 result = self.face_detector(frame)
+                
+                # if self.first_detection_run:
+                #     print(f"⏱️ 首帧人脸检测耗时: {time.time() - detection_start:.3f}s (热身后)")
+                #     self.first_detection_run = False
+                
                 detected_faces = []
                 
                 if hasattr(result, 'results') and len(result.results) > 0:
@@ -174,7 +259,12 @@ class FaceRecognitionSystem:
                     quality = face_info['quality']
                     
                     # 提取特征
+                    encode_start = time.time()
                     feature_vector = self.extract_features_with_cache(face_crop, bbox)
+                    # if self.first_recognition_run:
+                    #      print(f"⏱️ 首帧人脸特征提取耗时: {time.time() - encode_start:.3f}s (热身后)")
+                    #      self.first_recognition_run = False
+                    
                     if feature_vector is None:
                         continue
                     
@@ -342,7 +432,6 @@ class FaceRecognitionSystem:
                 # 对于静态图片，需要等待识别线程完成
                 if is_static_image and not processed_static_image:
                     # 对于静态图片，等待识别结果，直到队列中有数据
-                    # 或者设置一个超时，防止无限等待
                     try:
                         results, result_frame_id = self.result_queue.get(timeout=5) # 增加超时
                         # print(f"Static image: Got results for frame_id {result_frame_id}")
@@ -442,7 +531,6 @@ class FaceRecognitionSystem:
 
                 # 动态调整延迟
                 if is_static_image and processed_static_image:
-                    # 静态图片处理完成后，等待用户按键退出或进行其他操作
                     key = cv2.waitKey(0) & 0xFF 
                     if key == ord('q'):
                         break
@@ -459,14 +547,10 @@ class FaceRecognitionSystem:
                         )
                         thread.daemon = True
                         thread.start()
-                    # 如果是静态图片且已处理，且用户未按q，则继续循环，但不再重新处理
-                    # 这样可以保持窗口显示，直到用户操作
-                    continue # 跳过后续的延迟计算，直接进入下一次循环等待按键
+                    continue
                 elif is_static_image and not processed_static_image:
-                    # 静态图片首次处理中，不等待按键，快速循环以获取结果
-                    delay = 1 # 快速刷新
+                    delay = 1 
                 else:
-                    # 视频流模式下的正常延迟
                     elapsed = time.time() - loop_start
                     target_fps = 24
                     delay = max(1, int((1.0 / target_fps - elapsed) * 1000))
