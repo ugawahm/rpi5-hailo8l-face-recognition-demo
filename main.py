@@ -5,7 +5,7 @@ from face_recognition_system import FaceRecognitionSystem
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description='树莓派5 + Hailo-8L 人脸识别)',
+        description='树莓派5 + Hailo-8L 人脸识别系统demo',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -13,7 +13,7 @@ def parse_args():
   python main.py --input usb              # 使用 USB 摄像头
   python main.py --input video.mp4        # 处理视频文件
   python main.py --input photo.jpg        # 处理图片
-  python main.py --threshold 0.7          # 设置识别阈值为 0.7
+  python main.py --threshold 0.5          # 设置识别阈值为 0.5
   python main.py --no-adaptive            # 禁用自适应阈值
         """
     )
@@ -42,8 +42,8 @@ def parse_args():
     parser.add_argument(
         '--skip-frames',
         type=int,
-        default=5,
-        help='跳帧检测间隔 (默认: 5)'
+        default=3,
+        help='跳帧检测间隔 (默认: 3)'
     )
     
     parser.add_argument(
@@ -70,7 +70,7 @@ def parse_args():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🔷 树莓派5 + Hailo-8L 人脸识别")
+    print("🔷 树莓派5 + Hailo-8L 人脸识别系统demo")
     print("=" * 60)
     
     args = parse_args()
